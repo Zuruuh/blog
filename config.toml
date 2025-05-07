@@ -1,6 +1,6 @@
 theme = "neovim-theme"
 # The URL the site will be built for
-base_url = "https://blog.zuruh.dev"
+base_url = "https://zuruh.dev"
 
 # Whether to automatically compile all Sass files in the sass directory
 compile_sass = false
