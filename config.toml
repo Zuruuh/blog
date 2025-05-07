@@ -1,0 +1,29 @@
+theme = "neovim-theme"
+# The URL the site will be built for
+base_url = "https://blog.zuruh.dev"
+
+# Whether to automatically compile all Sass files in the sass directory
+compile_sass = false
+
+# Whether to build a search index to be used later on by a JavaScript library
+build_search_index = true
+
+[markdown]
+# Whether to do syntax highlighting
+# Theme can be customised by setting the `highlight_theme` variable to a theme supported by Zola
+highlight_code = true
+
+[extra]
+# set the name of the blog
+blog_name = "Zuruh's blog"
+
+# set the background image u want
+# background-image = "assets/background.jpg"
+
+# this parameter allow you to configure specific init functions/shortcuts and commands
+# the value has to be the path of you're config.js file
+config_js = "config.js"
+
+# allow you to include custom css into u're blog
+custom_css = "style.css"
+# Put all your custom variables here
