@@ -327,4 +327,9 @@ And we now have a development environment that boots in less than a second!
 ## Takeways
 
 We end up with a dual development environment, with the power of nix and the
-native-ness of windows 🙂
+native-ness of windows 🙂 Would I recommend this to anyone ? Probably not,
+VSCode would work better and you'd save yourself some headaches, but I found it
+pretty funny in the end. I simply have to run the project from windows and I get
+this pretty cool Dioxus console to monitor my project.
+
+![Dioxus Console](/dioxus_dev_console.png)
