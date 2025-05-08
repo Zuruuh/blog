@@ -1,23 +1,28 @@
 base_url = "https://zuruh.dev"
 theme = "feather"
 
+title = "Zuruh's Blog"
+description = "Yeah"
+default_language = "en"
+
 # Whether to automatically compile all Sass files in the sass directory
 compile_sass = false
 
 # Whether to build a search index to be used later on by a JavaScript library
 build_search_index = false
 
+taxonomies = [{ name = "tags", feed = true }]
+generate_feeds = true
+
 [markdown]
-# Whether to do syntax highlighting
-# Theme can be customised by setting the `highlight_theme` variable to a theme supported by Zola
 highlight_code = true
+highlight_theme = "css"
+highlight_themes_css = [
+  { theme = "ayu-dark", filename = "syntax-theme-dark.css" },
+  { theme = "ayu-light", filename = "syntax-theme-light.css" },
+]
 
 [extra.feather]
-# hide the navigation image
 # hide_nav_image = false
-# disqus_id = "my-site-com"
-# site domain if you want disqus comments
-# cusdis id if you use their comment service
-# cusdis_id = "12312-31231123-123123123"
 social = { url = "https://x.com/yziadi_", display = "@yziadi_" }
 timezone = "Europe/Paris"
