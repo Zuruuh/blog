@@ -24,11 +24,11 @@ Other solutions are probably great I don't care really, I am experienced with
 web technologies so if I can avoid learning a new language strictly for this
 then it's for the better.
 
-So, first of all, I initally thought C# could be a great choice because I wanted
-my app to feel native. After checking quickly the getting started and all the
-crap you need to install to get a hello world, I immediately changed my mind and
-went back to my web slop 😬. C# would definitely be the "correct" choice here
-but I am confident I can get away with one of the other two options with a
+So, first of all, I initially thought C# could be a great choice because I
+wanted my app to feel native. After checking quickly the getting started and all
+the crap you need to install to get a hello world, I immediately changed my mind
+and went back to my web slop 😬. C# would definitely be the "correct" choice
+here but I am confident I can get away with one of the other two options with a
 native-ish feel while still having good performances and keeping a relatively
 small bundle size (insert electron-bloat related pun)
 
@@ -114,3 +114,217 @@ So in the end, obviously, I kept my nix-neovim-zellij-nushell setup I love so
 much and tried looking for solutions to speed up my setup.
 
 ## Going down the performance rabbit hole
+
+Now I knew the two software that were slowing me down were Cargo (and
+rust-analyzer) and Git. As said earlier, the reason why they are slow in this
+context is because my project is located in `/mnt/z/`, which uses NTFS, and
+since both rely a lot on the filesystem, they get a massive performance penalty
+because of the file system overhead. So what could be the solution then ?
+
+### Moving out | Cargo
+
+As stupid as it may sound, you can actually locate your `target` directory
+outside of your project, in a completely different drive actually. This is
+perfect in this case, we can simply configure cargo to always use a target
+directory located elsewhere and we're done. Easy win!
+
+We can do so using the
+[`CARGO_TARGET_DIR`](https://doc.rust-lang.org/cargo/reference/build-cache.html)
+environment variable, which will be trivial to add using
+[`direnv`](https://direnv.net/)'s `.envrc`.
+
+```bash,name=.envrc
+use flake
+export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-"$HOME/.cache"}/.cache/myproject"
+```
+
+> I choose not to use nix flakes heres because `devShell.env.*` is supposed to
+> be pure so it cannot interpolate the host's environment variables Also I don't
+> want to use `shellHook`
+
+And now if I try to `cargo build` a simple default debug build with cold cache:
+
+```sh
+$ cargo clean
+... 
+$ cargo build
+...
+Compiling myproject-desktop v0.1.0 (/mnt/z/my-project)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.45s
+```
+
+Astonishing news! Down to a much more reasonable 33 seconds! This means
+rust-analyzer will be much quicker to provide analysis and completions, which
+are pretty important in rust projects, even more with the extensive use of
+macros like it's the case in Dioxus.
+
+But we aren't out of misery just yet. If I try to change a single line in my
+`src/main.rs` (Changing the heading from `Hello, World` to `Goodbye, World`) and
+try to `cargo build` again with a hot cache, we get:
+
+```sh
+$ cargo build
+   Compiling myproject-desktop v0.1.0 (/mnt/z/my-project)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.16s
+```
+
+A whopping 3 seconds of rebuild with a cold cache for a single string change!
+This could be good enough but of course we can dive further into it and make it
+a lot quicker.
+
+The reason why cargo (actually rustc) takes so much time to recompile a single
+change is because of linking. It's a pretty slow part that needs to happen at
+the end of each compilation to produce a final usable output (a binary for
+example). By default, rustc uses `rustc-lld` when using the `nightly` toolchain
+AND the `x86_64-unknown-linux-gnu` triple according to
+[this blog post](https://blog.rust-lang.org/2024/05/17/enabling-rust-lld-on-linux/)
+dating from March 2024, but historically, you'd use GNU LD by default. And, as
+much as it work, it is still pretty damn slow and is an inevitable part of the
+build process that we cannot avoid or cache efficiently.
+
+#### Introducing [`mold`](https://github.com/rui314/mold)
+
+<u>Mold</u> is an alternative linker that claims to be ~10x faster than GNU LD!
+
+![Mold benchmarks](/mold_benchmarks.svg)
+
+<center><small>Mold benchmarks against GNU LD, GNU Gold, LLVM LLD</small></center>
+
+Okay it doesn't actually claim to be 10 times faster, but in practice it looks
+like it is, and the benchmarks seems really promising.
+
+We can start using it pretty easily, simply by adding it to our nix flake:
+
+```nix,name=flake.nix
+pkgs.mkShell {
+    nativeBuildInputs = [
+        # ... 
+        pkgs.mold
+    ];
+}
+```
+
+And now, introducing the cargo configuration file, located at
+`.cargo/config.toml` (inside of the project root, not in your `$HOME` dir). Here
+we can add arbitrary rustflags that will be added by cargo to all `rustc` calls.
+We can now simply configure the `link-arg=-fuse-ld` rustc flag in our new
+configuration file just like so:
+
+```toml,name=.cargo/config.toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
+
+> Notice that we enable `mold` only on the `x86_64-unknown-linux-gnu` triple,
+> since it is not available on windows (yet?) we'll have to stick to the default
+> linker for now (TODO: check if we can use rust-lld here on windows?).
+
+And that's it! We can now try to re-compile the project with a simple change
+and... 🥁🥁🥁:
+
+```sh
+$ cargo build
+   Compiling myproject-desktop v0.1.0 (/mnt/z/my-project)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s
+```
+
+🥳🎉We now have a pretty decent compile time for tinkering locally. We are now
+done with cargo-related stuff.
+
+### Moving out | Git
+
+Now, we'll have to apply the same logic to git: move all it's storage (the
+`.git` dir) to another drive, while still having access to all git-related
+tooling. After a quick research, I learn about the `--git-dir` and `--work-tree`
+git flags, which is exactly what I need. After a bit of tinkering with nix's
+`makeShellWrapper`, I realized that you can also configure these options through
+the environment variables `GIT_WORK_TREE` and `GIT_DIR`, which are a lot simpler
+to use and setup. Just like before, we can add them to our `.envrc`
+
+```bash,name=.envrc
+use flake
+export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-"$HOME/.cache"}/.cache/myproject"
+export GIT_DIR="$HOME/dev/my-project.git"
+export GIT_WORK_TREE="$PWD"
+```
+
+The `GIT_WORK_TREE` is always the working directory, which in the context of
+direnv will always be the directory where the `.envrc` is located, so this is
+good 👍. Though for the `GIT_DIR`, I wasn't exactly sure where to put it so I
+just put some random crap, but you could do better I guess (I didn't look much
+into it). With this out of the way, I can now `mv .git ~/dev/my-project.git` and
+try to run a git status, and, drum rolls again 🥁🥁🥁:
+
+```sh
+$ hyperfine -N 'git status -uno'
+Benchmark 1: git status -uno
+  Time (mean ± σ):     318.2 ms ±  16.8 ms    [User: 8.6 ms, System: 5.7 ms]
+  Range (min … max):   297.9 ms … 351.3 ms    10 runs
+```
+
+Honestly this is better than expected, though we can try squeezing a bit more
+perfs out of this. We can use many different git options that help a bit
+
+```toml,name=.git/config
+[core]
+    # Default configuration options
+    repositoryformatversion = 0
+    bare = false
+    logallrefupdates = true
+    ignorecase = true
+
+    # https://git-scm.com/docs/git-config#Documentation/git-config.txt-coretrustctime
+    trustctime = false
+    # https://git-scm.com/docs/git-config#Documentation/git-config.txt-corecheckStat
+    checkStat = minimal
+    # https://git-scm.com/docs/git-config#Documentation/git-config.txt-corefileMode
+    fileMode = false
+```
+
+```sh
+$ hyperfine -N 'git status -uno'
+Benchmark 1: git status -uno
+  Time (mean ± σ):     161.4 ms ±   8.0 ms    [User: 4.4 ms, System: 3.2 ms]
+  Range (min … max):   153.4 ms … 178.0 ms    17 runs
+```
+
+This is pretty much the best we can hope to get. It's still astonishingly long
+for a simple git status, but way better than the initial results!
+
+## Fixing nix's flake development time
+
+And even after all of this, when I thought I was done, another issue arises.
+This time, it's my nix flake taking multiple minutes to activate a simple
+`devShell`. This is a well known problems of flakes, simply put, whenever you
+try to build it from scratch, the entire directory will be copied to the nix
+store. Even if the input is irrelevant, and there's no way to disable this
+behaviour.
+
+If you already used flakes, you might know that this is a thing, but why would
+it be a problem right ? Personally, I've never really had any issues with this,
+simply because nix adapts to your git repository. That's the reason why it's not
+as slow usually, because it only copies files that are tracked by git.
+
+So, with our new garbage setup, nix does not recognize our project as a git
+repository, so it proceeds to copy the entirety of it to the nix store, which is
+painfully slow since it will copy all the `target` directory from a filesystem
+to another. On top of that, it will take humongous amounts of storage for
+virtually nothing useful. Let's fix that:
+
+There is a simple workaround we can use, see, our flake doesn't need to know
+about the rest of our project, really it could be a standalone thing to simply
+install system dependencies. So, we can simply put all our nix-related files in
+a `./nix` subdirectory, and update the `.envrc` to use the flake located in this
+directory.
+
+```sh,name=.envrc
+use flake ./nix
+# ...
+```
+
+And we now have a development environment that boots in less than a second!
+
+## Takeways
+
+We end up with a dual development environment, with the power of nix and the
+native-ness of windows 🙂
